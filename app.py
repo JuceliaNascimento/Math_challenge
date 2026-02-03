@@ -1,85 +1,104 @@
 import streamlit as st
-import random
 import pandas as pd
-from streamlit_gsheets import GSheetsConnection
+import random
+from github import Github
+from io import StringIO
 
-# --- CONFIGURAÇÃO ---
-VALOR_POR_ACERTO = 0.10
+# --- CONFIGURAÇÕES ---
+REPO_NAME = "JuceliaNascimento/Math_challenge" # Seu repositório
+ARQUIVO_DADOS = "dados.csv"
 META_MAXIMA = 100.00
-NOME_SOBRINHA = "Sua Sobrinha"  # Personalize aqui
+VALOR_POR_ACERTO = 0.10
 
-st.set_page_config(page_title="Desafio de Aniversário", page_icon="🎂")
+st.set_page_config(page_title="Desafio da Sobrinha", page_icon="🎁")
 
-# --- FUNÇÕES DE BANCO DE DADOS (Google Sheets) ---
-def get_data():
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    # Lê a planilha. Se estiver vazia ou der erro, retorna dataframe inicial
+# --- FUNÇÃO PARA FALAR COM O GITHUB ---
+def gerenciar_dados(novo_saldo=None):
+    # Conecta ao GitHub usando o Token (que vamos configurar já já)
     try:
-        df = conn.read(worksheet="Dados", usecols=[0, 1], ttl=0)
-        if df.empty:
-            return pd.DataFrame({"Nome": [NOME_SOBRINHA], "Saldo": [0.0]})
-        return df
+        g = Github(st.secrets["GITHUB_TOKEN"])
+        repo = g.get_repo(REPO_NAME)
     except:
-        return pd.DataFrame({"Nome": [NOME_SOBRINHA], "Saldo": [0.0]})
+        st.error("Erro ao conectar no GitHub. Verifique o Token.")
+        return 0.0
 
-def update_saldo(novo_valor):
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    df = pd.DataFrame({"Nome": [NOME_SOBRINHA], "Saldo": [novo_valor]})
-    conn.update(worksheet="Dados", data=df)
+    # Tenta ler o arquivo
+    try:
+        contents = repo.get_contents(ARQUIVO_DADOS)
+        csv_content = contents.decoded_content.decode()
+        df = pd.read_csv(StringIO(csv_content))
+        saldo_atual = float(df.iloc[0]["Saldo"])
+        sha = contents.sha # Necessário para atualizar o arquivo
+    except:
+        # Se o arquivo não existe, cria um dataframe zerado
+        saldo_atual = 0.0
+        df = pd.DataFrame({"Nome": ["Sobrinha"], "Saldo": [0.0]})
+        sha = None
+
+    # Se for para atualizar (salvar novo valor)
+    if novo_saldo is not None:
+        df["Saldo"] = novo_saldo
+        csv_data = df.to_csv(index=False)
+        
+        if sha:
+            repo.update_file(ARQUIVO_DADOS, "Atualizando saldo", csv_data, sha)
+        else:
+            repo.create_file(ARQUIVO_DADOS, "Criando arquivo de saldo", csv_data)
+        return novo_saldo
+    
+    return saldo_atual
 
 # --- INTERFACE ---
-st.title(f"🎂 Parabéns, {NOME_SOBRINHA}!")
-st.write("Acerte as contas para ganhar seu presente. Cada acerto vale **R$ 0,10**!")
+st.title("🎁 Desafio de Matemática")
 
-# Carregar Saldo
-df = get_data()
-saldo_atual = float(df.iloc[0]["Saldo"])
+# Carrega saldo (sem atualizar)
+if "saldo" not in st.session_state:
+    st.session_state.saldo = gerenciar_dados()
 
-# Barra de Progresso
-progresso = min(saldo_atual / META_MAXIMA, 1.0)
+saldo_visual = st.session_state.saldo
+progresso = min(saldo_visual / META_MAXIMA, 1.0)
+
+st.write(f"Acumulado: **R$ {saldo_visual:.2f}** / Meta: R$ {META_MAXIMA:.2f}")
 st.progress(progresso)
-st.metric(label="Seu Presente Acumulado", value=f"R$ {saldo_atual:.2f}", delta=f"Meta: R$ {META_MAXIMA:.2f}")
 
-if saldo_atual >= META_MAXIMA:
+if saldo_visual >= META_MAXIMA:
     st.balloons()
-    st.success(f"PARABÉNS! Você atingiu o valor máximo de R$ {META_MAXIMA:.2f}! Tire um print e mande para o tio.")
+    st.success("PARABÉNS! Você completou o desafio! Mande um print para a tia.")
 else:
-    # --- LÓGICA DO JOGO ---
-    if "num1" not in st.session_state:
-        st.session_state.num1 = random.randint(2, 9)
-        st.session_state.num2 = random.randint(2, 9)
-        st.session_state.operacao = random.choice(["*", "/"])
-        # Ajuste para divisão exata
-        if st.session_state.operacao == "/":
-            st.session_state.num1 = st.session_state.num1 * st.session_state.num2
+    # Lógica do Jogo
+    if "n1" not in st.session_state:
+        st.session_state.n1 = random.randint(2, 9)
+        st.session_state.n2 = random.randint(2, 9)
+        st.session_state.op = random.choice(["x", "÷"])
+        if st.session_state.op == "÷": # Ajuste para divisão exata
+             st.session_state.n1 = st.session_state.n1 * st.session_state.n2
 
-    n1 = st.session_state.num1
-    n2 = st.session_state.num2
-    op_simbolo = "x" if st.session_state.operacao == "*" else "÷"
-
-    st.subheader(f"Quanto é {n1} {op_simbolo} {n2}?")
-
-    with st.form("math_form"):
-        resposta = st.number_input("Sua resposta:", step=1)
+    n1, n2, op = st.session_state.n1, st.session_state.n2, st.session_state.op
+    
+    st.subheader(f"Quanto é {n1} {op} {n2}?")
+    
+    with st.form("conta"):
+        resp = st.number_input("Resposta:", step=1)
         enviar = st.form_submit_button("Responder")
-
+        
         if enviar:
             correto = False
-            if st.session_state.operacao == "*" and resposta == (n1 * n2):
-                correto = True
-            elif st.session_state.operacao == "/" and resposta == (n1 / n2):
-                correto = True
+            if op == "x" and resp == (n1 * n2): correto = True
+            if op == "÷" and resp == (n1 / n2): correto = True
             
             if correto:
-                novo_saldo = saldo_atual + VALOR_POR_ACERTO
+                novo_saldo = st.session_state.saldo + VALOR_POR_ACERTO
                 if novo_saldo > META_MAXIMA: novo_saldo = META_MAXIMA
                 
-                update_saldo(novo_saldo) # Salva no Google Sheets
-                st.success("Resposta Certa! 💰 + R$ 0,10")
-                st.balloons()
+                # Salva no GitHub
+                with st.spinner("Salvando seu prêmio..."):
+                    gerenciar_dados(novo_saldo)
                 
-                # Resetar para próxima pergunta
-                del st.session_state["num1"] 
+                st.session_state.saldo = novo_saldo
+                st.success(f"Certa resposta! + R$ {VALOR_POR_ACERTO:.2f}")
+                
+                # Reinicia números
+                del st.session_state["n1"]
                 st.rerun()
             else:
-                st.error("Ops! Tente novamente.")
+                st.error("Tente de novo!")
